@@ -1,55 +1,68 @@
 import pandas as pd
 import xgboost as xgb
+from sklearn.model_selection import RandomizedSearchCV
 
-# Load data
+# 讀取資料
 train_data = pd.read_csv("data/train_data.csv")
 test_data = pd.read_csv("data/test_data.csv")
 
-# Prepare training and test sets
-X_train = train_data.drop(['fraud'], axis=1)
-y_train = train_data['fraud']
-combine_normal =  pd.concat([train_data, test_data], axis=0)
+# 合併資料以便統一處理
+combine_normal = pd.concat([train_data, test_data], axis=0, ignore_index=True)
 
-# process on data
+# 資料預處理
 combine_normal['att1'] = pd.to_datetime(combine_normal['att1']).apply(lambda x: x.timestamp())
-combine_normal = combine_normal.drop(columns=['att8', 'att9', 'att10', 'att11'])
+combine_normal = combine_normal.drop(columns=[ 'att9', 'att10', 'att11'])
 combine_normal = pd.get_dummies(combine_normal)
 
-# test & train
-train = combine_normal[combine_normal['Id'].isna()]
-train = train.drop(columns=['Id'])
-test = combine_normal[combine_normal['fraud'].isna()]
-test = test.drop(columns=['fraud'])
+# 分割訓練和測試集
+train = combine_normal[combine_normal['fraud'].notna()].copy()
+test = combine_normal[combine_normal['fraud'].isna()].copy()
 
-# Train_x, Train_y
-train_X = train.drop(columns=['fraud'])
+# 提取特徵和標籤
+train_X = train.drop(columns=['Id', 'fraud'])
 train_Y = train['fraud']
+test_X = test.drop(columns=['Id', 'fraud'])
+test_ids = test['Id']
 
-# Looping: Test -> predict
-result = [
-    ["Id", "fraud"],
-]
-
-for index in range(len(test)):
-    data = test.iloc[index]
+# 定義超參數搜索空間
+random_grid = {
+    'learning_rate': [0.01, 0.05, 0.1, 0.2],
+    'n_estimators': [100, 200, 300, 400, 500],
+    'max_depth': [3, 4, 5, 6, 7, 8, 9, 10],
+    'min_child_weight': [1, 2, 3, 4, 5],
+    'subsample': [0.6, 0.7, 0.8, 0.9, 1.0],
+    'colsample_bytree': [0.6, 0.7, 0.8, 0.9, 1.0],
+    'gamma': [0, 0.1, 0.2, 0.3, 0.4],
+    'reg_alpha': [0, 0.01, 0.1, 1],
+    'reg_lambda': [0, 0.01, 0.1, 1],
+}
 
 # 初始化 XGBoost 分類模型
-model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+xg4 = xgb.XGBClassifier(use_label_encoder=False, eval_metric="auc")
+
+# 設置 RandomizedSearchCV
+model = RandomizedSearchCV(
+    estimator=xg4, 
+    param_distributions=random_grid, 
+    n_iter=100, 
+    cv=3, 
+    verbose=2, 
+    random_state=42, 
+    n_jobs=-1
+)
 
 # 訓練模型
 model.fit(train_X, train_Y)
 
 # 預測測試集
-test_ids = test['Id']  # 假設 'Id' 欄位存在於 test DataFrame 中
-test_X = test.drop(columns=['Id'])  # 測試集的輸入特徵
+predictions = model.predict(test_X)
 
-for index in range(len(test_X)):
-    data = test_X.iloc[index]
-    prediction = model.predict([data])[0]  # 取得單筆預測結果
-    result.append([int(test_ids.iloc[index]), int(prediction)])  # 將 Id 和預測結果添加到 result
+# 生成提交結果
+result_df = pd.DataFrame({
+    'Id': test_ids.astype(int),
+    'fraud': predictions.astype(int)
+})
 
-# 將結果轉換成 DataFrame 並輸出成 CSV
-result_df = pd.DataFrame(result[1:], columns=result[0])  # 排除 header 列
+# 輸出結果
 result_df.to_csv("submission.csv", index=False)
-
 print("預測結果已儲存為 submission.csv")
